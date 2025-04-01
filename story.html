@@ -66,6 +66,19 @@
             stroke-width: 2;
             opacity: 0.8;
         }
+
+        .tooltip {
+            position: absolute;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 14px;
+            transform: translate(-50%, -100%);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
     </style>
 </head>
 <body>
@@ -78,6 +91,7 @@
 
     <div id="stories" class="story-grid"></div>
 
+    <div id="tooltip" class="tooltip"></div>
     <script type="module" src="./story.js"></script>
 </body>
 </html>

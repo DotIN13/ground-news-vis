@@ -12,7 +12,17 @@ const bias_mapping = {
     "farRight": 3
 }
 
-const EXTENT = [-3, 3];
+const source_bias_colors = {
+    "-3": "#0072B2",
+    "-2": "#56B4E9",
+    "-1": "#92C5DE",
+    "0": "#D0D1D5",
+    "1": "#F4A582",
+    "2": "#CA0020",
+    "3": "#D01719"
+}
+
+const EXTENT = [-2, 2];
 const ANIMATION_DURATION = 5000;
 
 class StoryVisualizer {
@@ -62,10 +72,10 @@ class StoryVisualizer {
 
     createYAxis() {
         return d3.axisLeft(this.yScale)
-            .tickValues([-3, -2, -1, 0, 1, 2, 3])
+            .tickValues([-2, -1, 0, 1, 2])
             .tickFormat(d => {
-                if (d === -3) return "farLeft";
-                if (d === 3) return "farRight";
+                if (d === -2) return "farLeft";
+                if (d === 2) return "farRight";
                 return d;
             });
     }
@@ -124,9 +134,10 @@ class StoryVisualizer {
             .map((d, i) => ({
                 id: i,
                 name: d.source_name,
-                bias: parseFloat(bias_mapping[d.source_bias]),
+                source_bias: bias_mapping[d.source_bias],
+                bias: parseFloat(d.llama_distill_bias) - 2,
                 date: new Date(d.date),
-                title: d.article_title,
+                title: d.title,
                 url: d.url
             }))
             .filter(d => !isNaN(d.bias))
@@ -191,21 +202,38 @@ class StoryVisualizer {
     }
 
     updateDataPoints() {
+        const tooltip = d3.select("#tooltip");
+        
         const points = this.svg.selectAll(".data-point")
             .data(this.currentData, d => d.id);
-
+    
         points.enter()
             .append("circle")
             .attr("class", "data-point")
             .attr("cx", d => this.xScale(d.date))
             .attr("cy", d => this.yScale(d.bias))
             .attr("r", 8)
-            .style("fill", d => d.bias < 0 ? "#3498db" : "#e74c3c")
+            .style("fill", d => source_bias_colors[d.source_bias])
             .style("opacity", 0)
+            .on("mouseover", function(event, d) {
+                tooltip
+                    .html(d.name)
+                    .style("opacity", 1)
+                    .style("left", `${event.pageX}px`)
+                    .style("top", `${event.pageY}px`);
+            })
+            .on("mousemove", function(event) {
+                tooltip
+                    .style("left", `${event.pageX}px`)
+                    .style("top", `${event.pageY}px`);
+            })
+            .on("mouseout", function() {
+                tooltip.style("opacity", 0);
+            })
             .transition()
             .duration(300)
             .style("opacity", 1);
-
+    
         points.exit()
             .transition()
             .duration(300)
@@ -263,7 +291,7 @@ class StoryVisualizer {
 (async () => {
     try {
         const visualizer = new StoryVisualizer("visualization");
-        await visualizer.loadData("climate-change_articles.csv");
+        await visualizer.loadData("data/climate-change_articles_llama_distill_clean.csv");
     } catch (error) {
         console.error("Application initialization failed:", error);
     }
