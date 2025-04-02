@@ -1,6 +1,7 @@
 import * as d3 from "d3";
 import { density1d } from "fast-kde";
 
+// Shared constants
 const bias_mapping = {
     "farLeft": -3,
     "left": -2,
@@ -10,7 +11,7 @@ const bias_mapping = {
     "leanRight": 1,
     "right": 2,
     "farRight": 3
-}
+};
 
 const source_bias_colors = {
     "-3": "#0072B2",
@@ -20,32 +21,149 @@ const source_bias_colors = {
     "1": "#F4A582",
     "2": "#CA0020",
     "3": "#D01719"
-}
+};
 
 const EXTENT = [-2, 2];
 const ANIMATION_DURATION = 5000;
 
-class StoryVisualizer {
+// Helper function
+const numbered = (num) => {
+    return num === 1 ? "1st" : num === 2 ? "2nd" : num === 3 ? "3rd" : num + "th";
+};
+
+// StoryList Component
+class StoryList {
+    constructor(containerId, onStorySelect) {
+        this.container = d3.select(`#${containerId}`);
+        this.onStorySelect = onStorySelect;
+        this.stories = [];
+    }
+
+    async loadData(url) {
+        try {
+            this.stories = await d3.json(url);
+            this.render();
+        } catch (error) {
+            console.error("Error loading data:", error);
+        }
+    }
+
+    render() {
+        this.container.selectAll(".story-card")
+            .data(this.stories)
+            .join("div")
+            .attr("class", "story-card")
+            .html(d => `
+                <h3>${d.title}</h3>
+                <p>${d.description}</p>
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="label">Sources:</span>
+                        <span class="value">${d.articles.length}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Controversy:</span>
+                        <span class="value">${d.surprise_index.toFixed(2)}</span>
+                    </div>
+                </div>
+                ${d.first_to_threshold ? `
+                <div class="threshold">
+                    Polarized from the ${numbered(d.first_to_threshold)} post
+                </div>` : ''}
+            `)
+            .on("click", (event, storyData) => {
+                this.onStorySelect(storyData);
+            });
+    }
+}
+
+// StoryModal Component
+class StoryModal {
+    constructor() {
+        this.modal = d3.select("#storyModal");
+        this.visualization = new StoryTimeline("modalVisualization");
+        this.setupHandlers();
+    }
+
+    setupHandlers() {
+        d3.select(".close").on("click", () => this.close());
+        this.modal.on("click", (event) => {
+            if (event.target === this.modal.node()) this.close();
+        });
+    }
+
+    open(storyData) {
+        this.renderArticles(storyData.articles);
+        this.visualization.setupStory(storyData);
+        this.modal.style("display", "block");
+    }
+
+    close() {
+        this.modal.style("display", "none");
+        this.visualization.resetVisualization();
+    }
+
+    renderArticles(articles) {
+        const container = d3.select("#articlesContainer");
+        container.html("");
+
+        articles.forEach(article => {
+            const item = container.append("div")
+                .attr("class", "article-item");
+
+            if (article.article_image_url) {
+                item.append("img")
+                    .attr("src", article.article_image_url)
+                    .attr("loading", "lazy")
+                    .attr("alt", article.title);
+            }
+
+            item.append("div")
+                .attr("class", "article-info")
+                .html(`
+                    <h4><a href="${article.url}" class="article-link" target="_blank">${article.title}</a></h4>
+                    <div class="source-info">
+                        <span class="source-name">${article.source_name}</span>
+                        <span class="bias-tag" style="background:${source_bias_colors[bias_mapping[article.source_bias]]}">
+                            ${article.source_bias}
+                        </span>
+                    </div>
+                `);
+        });
+    }
+}
+
+
+// StoryTimeline Component
+class StoryTimeline {
     constructor(containerId) {
         this.container = d3.select(`#${containerId}`);
-        this.width = 800;
+        this.width = 900;
         this.height = 500;
         this.animationDuration = ANIMATION_DURATION;
         this.isPlaying = false;
         this.currentData = [];
         this.currentTime = null;
         this.animationStart = null;
-        this.intervalId = null;
+        this.animationFrame = null;
         
         this.initScales();
-        this.setupControls();
         this.initSVG();
+        this.createLegend(); // Add legend creation
     }
 
     initScales() {
-        this.xScale = d3.scaleTime().range([50, this.width - 50]);
+        // X scale remains the same
+        this.xScale = d3.scaleTime().range([75, this.width - 75]);
+        // Y scale for bias (left axis)
         this.yScale = d3.scaleLinear()
             .domain(EXTENT)
+            .range([this.height - 50, 50]);
+        // New polarization scale for the right axis.
+        // Domain here is hardcoded to [0, 2] (adjust if needed)
+        // and the range is chosen to position the axis within the view.
+        this.polScale = d3.scaleLinear()
+            .domain([0, 1])
             .range([this.height - 50, 50]);
     }
 
@@ -54,30 +172,65 @@ class StoryVisualizer {
             .attr("width", this.width)
             .attr("height", this.height)
             .attr("viewBox", `0 0 ${this.width} ${this.height}`);
+
+        this.tooltip = this.container.append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0);
         
         this.createAxes();
         this.timeline = this.createTimeline();
     }
 
     createAxes() {
+        // X-axis (bottom)
         this.svg.append("g")
             .attr("class", "x-axis")
-            .attr("transform", `translate(0,${this.height - 50})`);
+            .attr("transform", `translate(0,${this.height - 50})`)
+            .call(d3.axisBottom(this.xScale));
 
+        // Left Y-axis for bias
         this.svg.append("g")
             .attr("class", "y-axis")
-            .attr("transform", "translate(50, 0)")
-            .call(this.createYAxis());
-    }
+            .attr("transform", "translate(75, 0)")
+            .call(
+                d3.axisLeft(this.yScale)
+                    .tickValues([-2, -1, 0, 1, 2])
+                    .tickFormat(d => {
+                        if (d === -2) return "Left";
+                        if (d === 2) return "Right";
+                        return d;
+                    })
+            );
 
-    createYAxis() {
-        return d3.axisLeft(this.yScale)
-            .tickValues([-2, -1, 0, 1, 2])
-            .tickFormat(d => {
-                if (d === -2) return "farLeft";
-                if (d === 2) return "farRight";
-                return d;
-            });
+        // Add left axis title
+        this.svg.append("text")
+            .attr("class", "y-axis-title")
+            .attr("transform", "rotate(-90)")
+            .attr("x", -this.height / 2)
+            .attr("y", 30)
+            .attr("text-anchor", "middle")
+            .style("font-size", "14px")
+            .text("Article Bias");
+
+        // New right Y-axis for polarization
+        this.svg.append("g")
+            .attr("class", "polarization-axis")
+            .attr("transform", `translate(${this.width - 75}, 0)`)
+            .call(
+                d3.axisRight(this.polScale)
+                    .ticks(5)
+                    .tickFormat(d => d.toFixed(1))
+            );
+
+        // Add right axis title
+        this.svg.append("text")
+            .attr("class", "pol-axis-title")
+            .attr("transform", "rotate(90)")
+            .attr("x", this.height / 2)
+            .attr("y", -this.width + 30)
+            .attr("text-anchor", "middle")
+            .style("font-size", "14px")
+            .text("Polarization");
     }
 
     createTimeline() {
@@ -89,29 +242,75 @@ class StoryVisualizer {
             .attr("y2", this.height - 50);
     }
 
-    async loadData(url) {
-        try {
-            let rawData = await d3.csv(url);
-            this.stories = d3.group(rawData, d => d.story_id);
-            this.renderStoryList();
-        } catch (error) {
-            console.error("Error loading data:", error);
-        }
+    // Add this new method to create the legend
+    createLegend() {
+        const legend = this.svg.append("g")
+            .attr("class", "legend")
+            .attr("transform", `translate(${this.width - 180}, 20)`);
+
+        // Legend title
+        legend.append("text")
+            .attr("class", "legend-title")
+            .attr("x", 0)
+            .attr("y", -10)
+            .attr("font-size", "14px")
+            .text("Outlet bias ratings");
+
+        const legendItems = [
+            { label: "Far Left", color: source_bias_colors["-3"] },
+            { label: "Left", color: source_bias_colors["-2"] },
+            { label: "Lean Left", color: source_bias_colors["-1"] },
+            { label: "Center", color: source_bias_colors["0"] },
+            { label: "Lean Right", color: source_bias_colors["1"] },
+            { label: "Right", color: source_bias_colors["2"] },
+            { label: "Far Right", color: source_bias_colors["3"] }
+        ];
+
+        legend.selectAll(".legend-item")
+            .data(legendItems)
+            .enter()
+            .append("g")
+            .attr("class", "legend-item")
+            .attr("transform", (d, i) => `translate(0, ${i * 20})`)
+            .each(function(d) {
+                d3.select(this)
+                    .append("circle")
+                    .attr("r", 5)
+                    .attr("cx", 10)
+                    .attr("cy", 10)
+                    .attr("fill", d.color);
+
+                d3.select(this)
+                    .append("text")
+                    .attr("x", 20)
+                    .attr("y", 15)
+                    .attr("font-size", "12px")
+                    .text(d.label);
+            });
     }
 
-    renderStoryList() {
-        const storyContainer = d3.select("#stories");
+    setupStory(storyData) {
+        this.resetVisualization();
         
-        storyContainer.selectAll(".story-card")
-            .data([...this.stories.values()])
-            .join("div")
-            .attr("class", "story-card")
-            .html(d => `
-                <h3>${d[0].title}</h3>
-                <p>${d[0].description}</p>
-                <small>${d.length} sources</small>
-            `)
-            .on("click", (event, storyData) => this.setupStory(storyData));
+        this.sources = storyData.articles
+            .map((d, i) => ({
+                id: i,
+                name: d.source_name,
+                source_bias: bias_mapping[d.source_bias],
+                bias: parseFloat(d.bias) - 2,
+                date: new Date(d.date),
+                title: d.title,
+                url: d.url,
+                image: d.article_image_url
+            }))
+            .filter(d => !isNaN(d.bias))
+            .sort((a, b) => a.date - b.date);
+
+        // Store polarization data (expected as an array of numbers)
+        this.polarization = storyData.polarization;
+        this.timeDomain = d3.extent(this.sources, d => d.date);
+        this.updateScales();
+        this.togglePlayback();
     }
 
     updateScales() {
@@ -122,35 +321,8 @@ class StoryVisualizer {
             .call(d3.axisBottom(this.xScale));
     }
 
-    setupControls() {
-        const playButton = document.getElementById("playButton");
-        playButton.addEventListener("click", () => this.togglePlayback());
-    }
-
-    setupStory(storyData) {
-        this.resetVisualization();
-        
-        this.sources = storyData
-            .map((d, i) => ({
-                id: i,
-                name: d.source_name,
-                source_bias: bias_mapping[d.source_bias],
-                bias: parseFloat(d.llama_distill_bias) - 2,
-                date: new Date(d.date),
-                title: d.title,
-                url: d.url
-            }))
-            .filter(d => !isNaN(d.bias))
-            .sort((a, b) => a.date - b.date);
-
-        this.timeDomain = d3.extent(this.sources, d => d.date);
-        this.updateScales();
-    }
-
     togglePlayback() {
         this.isPlaying = !this.isPlaying;
-        document.getElementById("playButton").textContent = 
-            this.isPlaying ? "⏸ Pause" : "▶ Play";
         
         if (this.isPlaying) {
             this.animationStart = Date.now() - (this.currentTime || 0);
@@ -165,30 +337,26 @@ class StoryVisualizer {
         this.currentTime = Math.min(elapsed, this.animationDuration);
         const progress = this.currentTime / this.animationDuration;
         
-        // Calculate current date
         const currentDate = new Date(
             this.timeDomain[0].getTime() + 
             progress * (this.timeDomain[1].getTime() - this.timeDomain[0].getTime())
         );
 
-        // Update visible data points
         this.currentData = this.sources.filter(d => d.date <= currentDate);
-        
         this.updateVisualization(currentDate);
         
         if (this.isPlaying && elapsed < this.animationDuration) {
             this.animationFrame = requestAnimationFrame(() => this.animate());
         } else {
             this.isPlaying = false;
-            document.getElementById("playButton").textContent = "▶ Play";
         }
     }
 
     updateVisualization(currentDate) {
         this.updateTimeline(currentDate);
-        this.updateTimeDisplay(currentDate);
         this.updateDataPoints();
-        this.updateDistribution(currentDate);
+        // this.updateDistribution(currentDate);
+        this.updatePolarizationTrend(currentDate); // New polarization trend update
     }
 
     updateTimeline(currentDate) {
@@ -196,14 +364,9 @@ class StoryVisualizer {
             .attr("x2", this.xScale(currentDate));
     }
 
-    updateTimeDisplay(currentDate) {
-        document.getElementById("timeDisplay").textContent = 
-            d3.timeFormat("%B %d, %Y")(currentDate);
-    }
-
     updateDataPoints() {
-        const tooltip = d3.select("#tooltip");
-        
+        const tooltip = this.tooltip;
+
         const points = this.svg.selectAll(".data-point")
             .data(this.currentData, d => d.id);
     
@@ -219,13 +382,13 @@ class StoryVisualizer {
                 tooltip
                     .html(d.name)
                     .style("opacity", 1)
-                    .style("left", `${event.pageX}px`)
-                    .style("top", `${event.pageY}px`);
+                    .style("left", `${event.clientX}px`)
+                    .style("top", `${event.clientY}px`);
             })
             .on("mousemove", function(event) {
                 tooltip
-                    .style("left", `${event.pageX}px`)
-                    .style("top", `${event.pageY}px`);
+                    .style("left", `${event.clientX}px`)
+                    .style("top", `${event.clientY}px`);
             })
             .on("mouseout", function() {
                 tooltip.style("opacity", 0);
@@ -241,37 +404,51 @@ class StoryVisualizer {
             .remove();
     }
 
-    updateDistribution(currentDate) {
-        if (this.currentData.length < 2) return;
+    // Updated polarization trend using the new polScale and added right axis.
+    updatePolarizationTrend(currentDate) {
+        if (!this.polarization || this.polarization.length < 2) return;
         
-        const biases = this.currentData.map(d => d.bias);
-        const estimator = density1d(biases, { bandwidth: 0.2, extent: EXTENT });
-        const kde = Array.from(estimator);
+        // Use the xScale (time) and our polarization scale (right axis) for y.
+        const xScale = this.xScale;
+        const yScale = this.polScale;
+
+        // Line generator for polarization trend.
+        const line = d3.line()
+            .x((_, i) => xScale(this.sources[i].date))
+            .y(d => yScale(d))
+            .curve(d3.curveStepAfter);
         
-        // Smooth transition for distribution
-        const t = d3.transition()
-            .duration(100)
-            .ease(d3.easeQuadInOut);
-
-        const area = d3.area()
-            .x0(d => this.xScale(currentDate) - (d.y * 80))
-            .x1(d => this.xScale(currentDate) + (d.y * 80))
-            .y(d => this.yScale(d.x))
-            .curve(d3.curveCatmullRom);
-
-        const paths = this.svg.selectAll(".distribution")
-            .data([kde]);
-
-        paths.enter()
+        // Update or create the polarization trend path.
+        const trend = this.svg.selectAll(".polarization-trend")
+            .data([this.polarization]);
+            
+        trend.enter()
             .append("path")
-            .attr("class", "distribution")
-            .merge(paths)
-            .transition(t)
-            .attr("d", area)
-            .style("fill", "currentColor")
-            .style("opacity", 0.2);
-
-        paths.exit().remove();
+            .attr("class", "polarization-trend")
+            .merge(trend)
+            .attr("d", line)
+            .style("fill", "none")
+            .style("stroke", "#e74c3c")
+            .style("stroke-width", 2)
+            .style("opacity", 0.7);
+            
+        // Add current position indicator on the polarization axis.
+        const indicator = this.svg.selectAll(".trend-indicator")
+            .data([currentDate]);
+            
+        indicator.enter()
+            .append("circle")
+            .attr("class", "trend-indicator")
+            .merge(indicator)
+            .attr("cx", d => xScale(currentDate))
+            .attr("cy", d => yScale(this.polarization[this.currentData.length - 1]))
+            .attr("r", 5)
+            .style("fill", "#e74c3c")
+            .style("stroke", "white")
+            .style("stroke-width", 1);
+            
+        trend.exit().remove();
+        indicator.exit().remove();
     }
 
     resetVisualization() {
@@ -279,20 +456,31 @@ class StoryVisualizer {
         this.currentTime = null;
         this.isPlaying = false;
         cancelAnimationFrame(this.animationFrame);
-        document.getElementById("playButton").textContent = "▶ Play";
         
-        this.svg.selectAll(".data-point, .distribution").remove();
+        this.svg.selectAll(".data-point, .distribution, .polarization-trend, .trend-indicator").remove();
         this.timeline.attr("x1", 50).attr("x2", 50);
-        document.getElementById("timeDisplay").textContent = "";
+    }
+}
+
+
+// Main Application
+class StoryVisualizerApp {
+    constructor() {
+        this.storyList = new StoryList("stories", (articles) => {
+            this.modal.open(articles);
+        });
+        this.modal = new StoryModal();
+    }
+
+    async init() {
+        try {
+            await this.storyList.loadData("dist/climate-change.json");
+        } catch (error) {
+            console.error("Application initialization failed:", error);
+        }
     }
 }
 
 // Initialize application
-(async () => {
-    try {
-        const visualizer = new StoryVisualizer("visualization");
-        await visualizer.loadData("data/climate-change_articles_llama_distill_clean.csv");
-    } catch (error) {
-        console.error("Application initialization failed:", error);
-    }
-})();
+const app = new StoryVisualizerApp();
+app.init();
