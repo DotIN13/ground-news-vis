@@ -1,6 +1,121 @@
 // app.js
 import * as d3 from "d3";
 
+const DEFAULT_OUTLET = "abc News";
+
+// Shared constants
+const bias_mapping = {
+  farLeft: -2,
+  left: -2,
+  leanLeft: -1,
+  center: 0,
+  unknown: 0,
+  leanRight: 1,
+  right: 2,
+  farRight: 2,
+};
+
+const bias_mapping_reverse = {
+  "-2": "Left",
+  "-1": "Center-Left",
+  "0": "Center",
+  "1": "Center-Right",
+  "2": "Right",
+};
+
+const numbered = (num) => {
+  return num === 1 ? "1st" : num === 2 ? "2nd" : num === 3 ? "3rd" : num + "th";
+};
+
+class ArticleList {
+  constructor(containerId, onStorySelect) {
+    this.container = d3.select(`#${containerId}`);
+    this.onStorySelect = onStorySelect;
+    this.stories = [];
+    this.limit = 9;
+  }
+
+  async loadData(url, storyFilter) {
+    try {
+      this.stories = await d3.json(url);
+      if (storyFilter) {
+        this.applyFilter(storyFilter);
+      } else
+        this.render();
+    } catch (error) {
+      console.error("Error loading data:", error);
+    }
+  }
+
+  // Method to filter stories by source_name
+  applyFilter(storyFilter) {
+    if (!storyFilter || !storyFilter.source_name) {
+      // If no filter is applied, show all stories
+      this.filteredStories = this.stories;
+    } else {
+      // Otherwise, filter stories whose source_name contains the filter text
+      this.filteredStories = this.stories.filter((story) => {
+        const filteredArticle = story.articles.filter((article) => article.source_name === storyFilter.source_name);
+        if (filteredArticle.length == 0)
+          return false;
+
+        if ((filteredArticle[0].bias - 2) == bias_mapping[filteredArticle[0].source_bias])
+          return false;
+
+        story.title = filteredArticle[0].title;
+        story.url = filteredArticle[0].url;
+        story.bias = filteredArticle[0].bias;
+        return true;
+      }
+      );
+    }
+    this.render();
+  }
+
+  render() {
+    // Use filteredStories (or all stories if no filter is applied)
+    const dataToRender = (this.filteredStories || this.stories).slice(0, this.limit);
+
+    this.container
+      .selectAll(".story-card")
+      .data(dataToRender, (d) => d.id) // assuming stories have unique id
+      .join("div")
+      .attr("class", "story-card")
+      .html(
+        (d) => `
+            <h3>${d.title}</h3>
+            <div class="metrics">
+              <div class="metric">
+                <span class="label">Bias:</span>
+                <span class="value">${bias_mapping_reverse[d.bias - 2]}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Controversy:</span>
+                <span class="value">${d.surprise_index.toFixed(2)}</span>
+              </div>
+            </div>
+            ${
+              d.first_to_threshold
+                ? `
+            <div class="threshold">
+              Polarized from the ${numbered(d.first_to_threshold)} post
+            </div>`
+                : ""
+            }
+          `
+      )
+      .on("click", (event, storyData) => {
+        // Open a new tab with the story URL
+        window.open(storyData.url, "_blank");
+        // Call the onStorySelect callback if provided
+        if (this.onStorySelect) {
+          this.onStorySelect(storyData);
+        }
+      });
+  }
+}
+
+
 class MediaBiasVisualizer {
   constructor() {
     // Create a tooltip element used by multiple charts
@@ -60,14 +175,14 @@ class MediaBiasVisualizer {
     d3.csv("dist/source_bias.csv", d3.autoType).then((data) => {
       // Initialize the distribution chart using a featured source
       const featured =
-        data.find((d) => d.source_name.includes("Washington Times")) || {
-          source_name: "Washington Times",
+        data.find((d) => d.source_name.includes(DEFAULT_OUTLET)) || {
+          source_name: DEFAULT_OUTLET,
           bias_dist: "[5,15,20,20,20,15,5]",
         };
-      this.updateDistributionChart(featured.source_name, featured.bias_dist);
+      this.updateDistributionChart(featured);
 
       // Filter data for the scatter plot and build it
-      const biasData = data.filter((d) => d.topic_story_count > 120);
+      const biasData = data.filter((d) => d.topic_story_count > 100);
       this.initScatterPlot(biasData);
       // Build the treemap from all data
       this.initTreemap(data);
@@ -75,60 +190,135 @@ class MediaBiasVisualizer {
   }
 
   // Update the bias distribution bar chart for a given media source
-  updateDistributionChart(sourceName, biasDist) {
+  updateDistributionChart(storyData) {
+    const {
+      source_name: sourceName, surprising_dist: surprisingDistRaw, unsurprising_dist: unsurprisingDistRaw, source_bias: sourceBias,
+    } = storyData;
     const distSvg = d3.select("#distribution-chart");
     distSvg.selectAll("*").remove();
     document.getElementById("distribution-title").textContent = `Bias Distribution: ${sourceName}`;
-
+  
     const margin = { top: 20, right: 30, bottom: 70, left: 70 };
     const width = distSvg.node().getBoundingClientRect().width - margin.left - margin.right;
     const height = distSvg.node().getBoundingClientRect().height - margin.top - margin.bottom;
-
+  
     const g = distSvg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-
-    // Convert the bias distribution string into an array of numbers
-    const distArray = biasDist.replace(/[\[\]]/g, "").split(",").map(Number);
+  
+    // Parse JSON strings like "[5,10,15,20,25]"
+    const surprising = JSON.parse(surprisingDistRaw);
+    const unsurprising = JSON.parse(unsurprisingDistRaw);
+  
+    const data = this.categories.map((label, i) => ({
+      category: label,
+      surprising: surprising[i] || 0,
+      unsurprising: unsurprising[i] || 0,
+    }));
+  
+    // Stack the two series
+    const stack = d3.stack().keys(["surprising", "unsurprising"]);
+    const series = stack(data);
+  
     const x = d3.scaleBand().domain(this.categories).range([0, width]).padding(0.2);
-    const y = d3.scaleLinear().domain([0, d3.max(distArray)]).range([height, 0]);
-
+    const y = d3.scaleLinear()
+      .domain([0, d3.max(data, d => d.surprising + d.unsurprising)])
+      .range([height, 0]);
+  
+    // Axes
     g.append("g")
       .attr("transform", `translate(0,${height})`)
-      .call(d3.axisBottom(x))
-      .selectAll("text")
-      .style("text-anchor", "middle")
-      .attr("dy", "0.75em");
-
+      .call(d3.axisBottom(x));
+  
     g.append("g").call(d3.axisLeft(y));
-
-    g.selectAll(".bar")
-      .data(distArray)
+  
+    // Colors
+    const color = d3.scaleOrdinal()
+      .domain(["surprising", "unsurprising"])
+      .range(["#ffeb3b", "#b1b1b1"]);
+  
+    // Bars
+    g.selectAll("g.layer")
+      .data(series)
+      .enter()
+      .append("g")
+      .attr("class", "layer")
+      .attr("fill", d => color(d.key))
+      .selectAll("rect")
+      .data(d => d)
       .enter()
       .append("rect")
-      .attr("class", "distribution-bar")
-      .attr("x", (d, i) => x(this.categories[i]))
-      .attr("y", (d) => y(d))
+      .attr("x", d => x(d.data.category))
+      .attr("y", d => y(d[1]))
+      .attr("height", d => y(d[0]) - y(d[1]))
       .attr("width", x.bandwidth())
-      .attr("height", (d) => height - y(d))
       .on("mouseover", (event, d) => {
-        d3.select(event.currentTarget).attr("fill", "#e15759");
         this.tooltip.transition().duration(200).style("opacity", 0.9);
+        const total = d[1] - d[0];
         this.tooltip
-          .html(`${d} articles`)
+          .html(`${total} articles`)
           .style("left", `${event.pageX + 10}px`)
           .style("top", `${event.pageY - 28}px`);
       })
-      .on("mouseout", (event, d) => {
-        d3.select(event.currentTarget).attr("fill", "#4e79a7");
+      .on("mouseout", () => {
         this.tooltip.transition().duration(500).style("opacity", 0);
       });
-
+  
+    // X-axis label
     g.append("text")
       .attr("x", width / 2)
       .attr("y", height + 50)
       .attr("text-anchor", "middle")
       .style("font-size", "14px")
-      .text("Frequency of Articles by Bias Category");
+      .text("Bias Category");
+  
+    // Legend
+    const legend = distSvg.append("g").attr("transform", `translate(${width - 100}, 10)`);
+  
+    ["Controversial", "Not Controversial"].forEach((key, i) => {
+      const yOffset = i * 20;
+      legend
+        .append("rect")
+        .attr("x", 0)
+        .attr("y", yOffset)
+        .attr("width", 15)
+        .attr("height", 15)
+        .attr("fill", color(key));
+      legend
+        .append("text")
+        .attr("x", 20)
+        .attr("y", yOffset + 12)
+        .text(key.charAt(0).toUpperCase() + key.slice(1))
+        .attr("font-size", "12px");
+    });
+
+    // Add comparison text
+    const totalSurprising = surprising.reduce((sum, v) => sum + v, 0);
+    const totalUnsurprising = unsurprising.reduce((sum, v) => sum + v, 0);
+    const total = totalSurprising + totalUnsurprising;
+
+    let alignedSurprising = 0, alignedUnsurprising = 0, deviantSurprising = 0, deviantUnsurprising = 0;
+
+    for (let i = 0; i < 5; i++) {
+      if (i - 2 === sourceBias) {
+        alignedSurprising += surprising[i] || 0;
+        alignedUnsurprising += unsurprising[i] || 0;
+      } else {
+        deviantSurprising += surprising[i] || 0;
+        deviantUnsurprising += unsurprising[i] || 0;
+      }
+    }
+
+    const alignedTotal = alignedSurprising + alignedUnsurprising;
+    const deviantTotal = deviantSurprising + deviantUnsurprising;
+
+    const alignedPct = alignedTotal > 0 ? (alignedSurprising / alignedTotal) * 100 : 0;
+    const deviantPct = deviantTotal > 0 ? (deviantSurprising / deviantTotal) * 100 : 0;
+
+    d3.select("#bias-contrast-text").html(
+      `</strong> Among <strong>Spontaneous Articles</strong> whose bias aligns with the outlet bias, <strong>${alignedPct.toFixed(1)}%</strong> are controversial.<br>Among <strong>Deviant Articles</strong>, <strong>${deviantPct.toFixed(1)}%</strong> are controversial.`
+    );
+
   }
+  
 
   // Initialize the scatter plot of outlet bias vs. article bias
   initScatterPlot(biasData) {
@@ -179,13 +369,11 @@ class MediaBiasVisualizer {
       .text("Mean Article Bias");
 
     const source_bias_colors = {
-      "-3": "#08305B",
       "-2": "#08305B",
       "-1": "#2272B2",
       "0": "#D0D1D5",
       "1": "#FB6A4A",
       "2": "#A50F15",
-      "3": "#A50F15",
     };
 
     const circles = scatterG
@@ -217,13 +405,23 @@ class MediaBiasVisualizer {
         this.tooltip.transition().duration(500).style("opacity", 0);
       })
       .on("click", (event, d) => {
+        // Remove previous selections and mark this circle as selected
         circles.classed("selected-circle", false).attr("stroke-width", 0);
-        d3.select(event.currentTarget).classed("selected-circle", true).attr("stroke-width", 3).attr("stroke", "#000");
-        this.updateDistributionChart(d.source_name, d.bias_dist || "[0,0,0,0,0,0,0]");
+        d3.select(event.currentTarget)
+          .classed("selected-circle", true)
+          .attr("stroke-width", 3)
+          .attr("stroke", "#000");
+        
+        // Update the bias distribution chart for the selected outlet
+        this.updateDistributionChart(d);
+        
+        // Filter the news list by the selected source name
+        // (Assuming your StoryVisualizerApp instance is stored in a global variable "stories")
+        articleList.applyFilter({source_name: d.source_name});
       });
 
     // Highlight the featured outlet if present
-    const featuredCircle = circles.filter((d) => d.source_name.includes("Washington Times"));
+    const featuredCircle = circles.filter((d) => d.source_name.includes(DEFAULT_OUTLET));
     if (!featuredCircle.empty()) {
       featuredCircle.classed("selected-circle", true).attr("stroke-width", 3).attr("stroke", "#000");
     }
@@ -411,5 +609,8 @@ class MediaBiasVisualizer {
 }
 
 // Instantiate and initialize the visualizer
+const articleList = new ArticleList("stories")
 const visualizer = new MediaBiasVisualizer();
-visualizer.init();
+
+visualizer.init()
+articleList.loadData("dist/israeli-palestinian-conflict.json", {source_name: DEFAULT_OUTLET});

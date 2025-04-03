@@ -10,7 +10,8 @@
     {
       "imports": {
         "d3": "https://esm.run/d3@7",
-        "fast-kde": "https://esm.run/fast-kde@0.2.2"
+        "fast-kde": "https://esm.run/fast-kde@0.2.2",
+        "stories": "./stories.js"
       }
     }
   </script>
@@ -148,7 +149,7 @@
     }
 
     /* Summary Section */
-    #summary blockquote {
+    blockquote {
       font-style: italic;
       text-align: center;
       max-width: 600px;
@@ -256,6 +257,8 @@
     /** Stories Panel **/
     .stories-panel {
       margin: 2rem 0;
+      max-width: 1200px;
+      margin: 0 auto;
     }
 
     .story-grid {
@@ -434,6 +437,20 @@
     .article-link:hover {
       text-decoration: underline;
     }
+
+    .section-comments {
+      margin-top: 1rem;
+      margin-bottom: 2rem;
+      text-align: center;
+    }
+
+    .controversy {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      background: #ffeb3b;
+      font-weight: bold;
+    }
   </style>
 </head>
 
@@ -444,18 +461,41 @@
     <div id="stats-counters">
       <div class="counter" id="total-articles">Articles: <span>0</span></div>
       <div class="counter" id="total-stories">Stories: <span>0</span></div>
-      <div class="counter" id="num-sources">Sources: <span>0</span></div>
+      <div class="counter" id="num-sources">Outlets: <span>0</span></div>
     </div>
-    <p>Using a dataset of thousands of news stories, we uncover how bias and ownership shape the news you read.</p>
+    <p>Using a dataset of thousands of news stories on Israeli-Palestinian Conflict, we uncover how bias and ownership shape the news you read.</p>
+    <p>Authors: Tianyi Zhang, Jiahang Luo, Eddie Tian</p>
     <div class="scroll-down" onclick="document.querySelector('#bias-landscape').scrollIntoView({behavior: 'smooth'})">
       ↓
     </div>
   </section>
 
+  <section id="metric-explainer">
+    <h2>Understanding the <span class="controversy">Controversy</span> Score</h2>
+    <div class="sentinel"></div>
+    <p>
+      Not all news stories are covered the same way. Some spark heated divides in tone, framing, and attention across outlets. 
+      The <strong>controversy score</strong>—or <em>surprise index</em>—is a metric designed to quantify this dynamic.
+    </p>
+    <p>
+      This score blends three signals: the <strong>polarization</strong> of article bias over time, how quickly a story becomes <strong>ideologically split</strong>, and the <strong>breadth of its coverage</strong>. Together, they reveal how uniformly—or inconsistently—a story is told across the media spectrum.
+    </p>
+    <p>
+      A high controversy score signals a story that disrupts expectations: left-leaning and right-leaning outlets may frame it differently, or focus on opposing angles. A lower score implies more consistent or less partisan coverage.
+    </p>
+    <p>
+      By surfacing these hidden dynamics, the score helps readers move beyond the headline and see the <strong>structural tensions</strong> behind how stories are reported, politicized, or sidelined.
+    </p>
+  </section>
+  
+
   <!-- Bias Landscape Overview with Distribution -->
   <section id="bias-landscape">
     <h2>Bias Landscape Overview</h2>
     <div class="sentinel"></div>
+    <blockquote>
+      "Not all coverage conforms to the label on the box. News pieces often slip past the ideological curtain of the publishing houses, speaking surprising tones."
+    </blockquote>
     <div class="dual-chart-container">
       <div class="chart-panel">
         <h3>Article Bias VS. Outlet Bias</h3>
@@ -466,7 +506,11 @@
         <svg id="distribution-chart" width="100%" height="500"></svg>
       </div>
     </div>
+    <div class="bias-contrast section-comments">
+      <p id="bias-contrast-text" class="bias-contrast-text"></p>
+    </div>
     <div class="stories-panel">
+      <h3>Deviant Articles from This Outlet</h3>
       <div id="stories" class="story-grid"></div>
 
       <div id="storyModal" class="modal">
@@ -488,9 +532,12 @@
   <section id="source-ownership">
     <h2>Source Ownership Insights</h2>
     <div class="sentinel"></div>
+    <blockquote>
+      "News agencies don't just inform—it echoes. The voice behind the headlines often belongs to those who holds the purse strings."
+    </blockquote>    
     <div class="chart-container">
       <div class="toggle-container">
-        <button id="toggle-source-bias" class="toggle-btn active">Color by Source Bias</button>
+        <button id="toggle-source-bias" class="toggle-btn active">Color by Outlet Bias</button>
         <button id="toggle-mean-bias" class="toggle-btn">Color by Mean Article Bias</button>
       </div>
       <div class="legend">
@@ -517,24 +564,17 @@
       </div>
       <svg id="ownership-chart" width="100%" height="650"></svg>
     </div>
-    <p>
-      The treemap above visualizes media ownership by grouping news sources under their parent companies. Each rectangle’s size corresponds to the total story count, while the color indicates bias—allowing for a quick visual assessment of both ownership concentration and ideological leaning.
-      <br><br>
-      Use the toggle buttons to switch between coloring by the individual outlet bias and the mean article bias. This dual perspective can help reveal if conglomerates tend to homogenize content or if there is significant variation among their outlets.
-    </p>
+    <div class="section-comments">
+      <p>
+        The media landscape is a complex web of ownership and bias. The chart above illustrates the ownership of various news outlets and their respective biases. The color coding helps to visualize the political leanings of each outlet.
+      </p>
+    </div>
   </section>
 
   <!-- Summary & Reflection -->
   <section id="summary">
     <h2>Summary & Reflection</h2>
     <div class="sentinel"></div>
-    <p>
-      Our analysis reveals a complex media landscape where bias and ownership intersect. The scatter plot highlights a broad spectrum of media sources, while the bias distribution chart exposes how individual outlets may lean more strongly one way or the other than their overall average suggests.
-      <br><br>
-      Meanwhile, the treemap of media ownership underscores that a small number of large conglomerates command significant influence. This concentration can potentially shape the overall narrative by reinforcing certain perspectives across multiple platforms.
-      <br><br>
-      Ultimately, these visualizations invite further inquiry into how media bias and ownership dynamics affect public discourse and the diversity of viewpoints available to the public.
-    </p>
     <blockquote>
       "Every story has a storyteller. Bias isn't just what is said, but who says it, and who owns the voice."
     </blockquote>
@@ -544,7 +584,6 @@
 
   <!-- Main Script using ES6 Modules -->
   <script type="module" src="index.js"></script>
-  <script type="module" src="stories.js"></script>
 </body>
 
 </html>
